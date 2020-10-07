@@ -17,11 +17,28 @@ use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::descriptor::PipelineLayoutAbstract;
 
 use vulkano::command_buffer::AutoCommandBufferBuilder;
+use vulkano::sync;
+use vulkano::sync::GpuFuture;
+
+use vulkano::format::Format;
+use vulkano::image::Dimensions;
+use vulkano::image::StorageImage;
+
+use vulkano::format::ClearValue;
+
+use image::{ImageBuffer, Rgba};
 
 mod cs {
     vulkano_shaders::shader!{
         ty: "compute",
         path: "src/shaders/test.comp"
+    }
+}
+
+mod mandelbrot {
+    vulkano_shaders::shader!{
+        ty: "compute",
+        path: "src/shaders/mandelbrot.comp"
     }
 }
 
@@ -58,8 +75,18 @@ fn main() {
 
     // Create the device and queues
     let (device, mut queues) = {
-        Device::new(physical, &Features::none(), &DeviceExtensions{khr_storage_buffer_storage_class: true, ..DeviceExtensions::none()},
-                    [(queue_family, 0.5)].iter().cloned()).expect("Familed to create device")
+        Device::new(
+            physical, 
+            &Features::none(), 
+            &DeviceExtensions{
+                khr_storage_buffer_storage_class: true, 
+                ..DeviceExtensions::none()
+            },
+            [(queue_family, 0.5)]
+                                .iter()
+                                .cloned()
+        )
+        .expect("Failed to create device")
     };
 
     let queue = queues.next().unwrap();
@@ -113,4 +140,99 @@ fn main() {
 
     let cmd_buffer = cmd_buffer_builder.build().unwrap();
 
+    // Begin image portion
+
+    let image = StorageImage::new(
+        device.clone(),
+        Dimensions::Dim2d {
+            width: 1024,
+            height: 1024
+        },
+        Format::R8G8B8A8Unorm,
+        Some(queue.family())
+    ).unwrap();
+
+    let image_buffer= CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        false,
+        (0 .. 1024 * 1024 * 4).map(|_| 0u8)
+    ).expect("Failed to create image buffer");
+
+    let mandelbrot_shader = mandelbrot::Shader::load(device.clone()).expect("Failed to load mandelbrot shader");
+    let image_compute_pipeline = Arc::new(
+        ComputePipeline::new(
+            device.clone(),
+            &mandelbrot_shader.main_entry_point(),
+            &()
+        ).expect("Failed to create image compute pipeline")
+    );
+
+    let image_layout = image_compute_pipeline.layout().descriptor_set_layout(0).unwrap();
+    let image_set = Arc::new(
+        PersistentDescriptorSet::start(image_layout.clone())
+            .add_image(image.clone()).unwrap()
+            .build().unwrap()
+    );
+
+    let mut image_cmd_buf_builder = AutoCommandBufferBuilder::new(
+        device.clone(),
+        queue.family()
+    ).unwrap();
+
+    image_cmd_buf_builder
+        .clear_color_image(
+            image.clone(), 
+            ClearValue::Float(
+                [0.0, 0.0, 1.0, 1.0]
+            )
+        ).unwrap()
+        .dispatch(
+            [1024 / 8, 1024 / 8, 1],
+            image_compute_pipeline.clone(),
+            image_set.clone(),
+            ()
+        ).unwrap()
+        .copy_image_to_buffer(
+            image.clone(),
+            image_buffer.clone()
+        ).unwrap();
+
+    let image_command_buffer = image_cmd_buf_builder.build().unwrap();
+
+    // Execute
+    let future = sync::now(device.clone())
+        .then_execute(
+            queue.clone(), 
+            cmd_buffer
+        )
+        .unwrap()
+        .then_execute(
+            queue.clone(),
+            image_command_buffer,
+        )
+        .unwrap()
+        .then_signal_fence_and_flush()
+        .unwrap();
+
+    future.wait(None).unwrap();
+
+    println!("Compute dispatch done");
+
+    // Assert test shader output is correct
+    let data_buffer_content = buffer.read().unwrap();
+    for n in 0..65536 {
+        let test_struct = data_buffer_content[n as usize];
+        assert_eq!(test_struct.a, n as f32 * 12f32);
+        assert_eq!(test_struct.b, n as f32 * 21f32);
+    }
+
+    let image_buffer_content = image_buffer.read().unwrap();
+    let image = ImageBuffer::<Rgba<u8>, _>::from_raw(
+        1024, 
+        1024,
+        &image_buffer_content[..]
+    ).unwrap();
+
+    image.save("image.png").unwrap();
 }
