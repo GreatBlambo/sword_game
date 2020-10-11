@@ -216,6 +216,16 @@ macro_rules! backbuffer {
     );
 }
 
+#[macro_export]
+macro_rules! attachment {
+    ($atch_name:ident, $builder:ident, $format:expr, $samples:literal) => (
+        let $atch_name = $builder.add_attachment(std::stringify!($atch_name), $format, $samples);
+    );
+    ($atch_name:ident, $builder:ident, $format:expr) => (
+        let $atch_name = $builder.add_attachment(std::stringify!($atch_name), $format, 1);
+    );
+}
+
 #[macro_export(local_inner_macros)]
 macro_rules! render_config {
     {
@@ -223,8 +233,8 @@ macro_rules! render_config {
         attachments: {
             $(
                 $atch_name:ident: {
-                    format: $format:expr,
-                    samples: $samples:expr
+                    format: $format:expr
+                    $(,samples: $samples:literal)?
                 }
             ),*
         },
@@ -266,7 +276,7 @@ macro_rules! render_config {
             pub fn build() -> Result<crate::rendering::Renderer, &'static str> {
                 let builder = crate::rendering::RendererBuilder::new();
                 $(
-                    let $atch_name = builder.add_attachment(std::stringify!($atch_name), $format, $samples);
+                    attachment!($atch_name, builder, $format$(, $samples)?);
                 )*
 
                 $(

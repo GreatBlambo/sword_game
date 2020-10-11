@@ -39,28 +39,25 @@ render_config!(
     name: test_render_config,
     attachments: {
         depth: {
-            format: Format::D24Unorm_S8Uint,
-            samples: 1
+            format: Format::D24Unorm_S8Uint
         },
         albedo: {
-            format: Format::R8G8B8A8Unorm,
-            samples: 1
+            format: Format::R8G8B8A8Unorm
         },
         normal: {
-            format: Format::R8G8Unorm,
-            samples: 1
+            format: Format::R8G8Unorm
         },
         color: {
-            format: Format::R8G8B8A8Unorm,
-            samples: 1
+            format: Format::R8G8B8A8Unorm
         },
         blur: {
-            format: Format::R8G8B8A8Unorm,
-            samples: 1
+            format: Format::R8G8B8A8Unorm
         },
         blur2: {
-            format: Format::R8G8B8A8Unorm,
-            samples: 1
+            format: Format::R8G8B8A8Unorm
+        },
+        id: {
+            format: Format::R32Uint
         }
     },
     default_vertex_bindings: [
@@ -135,6 +132,18 @@ render_config!(
             depth_stencil_output: {},
             color_inputs: [color, blur, blur2],
             depth_stencil_input: {},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        },
+        id_pass: {
+            color_outputs: [id],
+            depth_stencil_output: {},
+            color_inputs: [color],
+            depth_stencil_input: {depth},
             pipeline: {
                 shader_paths: {
                     vertex: "src/shaders/passthrough_2d.vert",
