@@ -7,40 +7,111 @@ use vulkano::device::Device;
 use vulkano::device::DeviceExtensions;
 use vulkano::device::Features;
 
-use vulkano::buffer::BufferUsage;
 use vulkano::buffer::CpuAccessibleBuffer;
+use vulkano::buffer::BufferUsage;
 
 use std::sync::Arc;
-use vulkano::pipeline::ComputePipeline;
-
-use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
-use vulkano::descriptor::PipelineLayoutAbstract;
-
-use vulkano::command_buffer::AutoCommandBufferBuilder;
-use vulkano::sync;
-use vulkano::sync::GpuFuture;
-
 use vulkano::format::Format;
+
+use vulkano::framebuffer::Framebuffer;
 use vulkano::image::Dimensions;
 use vulkano::image::StorageImage;
 
-use vulkano::format::ClearValue;
+use vulkano::command_buffer::AutoCommandBufferBuilder;
 
-use image::{ImageBuffer, Rgba};
+use vulkano::pipeline::GraphicsPipeline;
+use vulkano::framebuffer::Subpass;
 
-mod cs {
-    vulkano_shaders::shader!{
-        ty: "compute",
-        path: "src/shaders/test.comp"
+use vulkano::command_buffer::DynamicState;
+use vulkano::pipeline::viewport::Viewport;
+
+use vulkano::sync;
+use vulkano::sync::GpuFuture;
+
+use image::ImageBuffer;
+use image::Rgba;
+
+use vulkano::pipeline::vertex::OneVertexOneInstanceDefinition;
+
+mod rendering;
+
+render_config!(
+    name: test_render_config,
+    attachments: {
+        depth: {
+            format: Format::D24Unorm_S8Uint,
+            samples: 1
+        },
+        color: {
+            format: Format::R8G8B8A8Unorm,
+            samples: 1
+        },
+        normal: {
+            format: Format::R8G8Unorm,
+            samples: 1
+        }
+    },
+    default_vertex_bindings: [
+        {
+            vertex_type_name: Vertex,
+            input_rate: 0,
+            attributes: {
+                position: [f32; 2],
+                color: [f32; 2]
+            }
+        },
+        {
+            vertex_type_name: InstanceData,
+            input_rate: 1,
+            attributes: {
+                position_offset: [f32; 2],
+                scale: f32
+            }
+        }
+    ],
+    graphics_passes: {
+        gbuffer: {
+            color_outputs: [color, normal],
+            depth_stencil_output: {depth},
+            color_inputs: [],
+            depth_stencil_input: {},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        },
+        lighting: {
+            color_outputs: [backbuffer],
+            depth_stencil_output: {},
+            color_inputs: [color, normal],
+            depth_stencil_input: {depth},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        }
     }
+);
+
+#[derive(Default, Copy, Clone)]
+struct Vertex {
+    position: [f32; 2],
+    color: [f32; 3]
 }
 
-mod mandelbrot {
-    vulkano_shaders::shader!{
-        ty: "compute",
-        path: "src/shaders/mandelbrot.comp"
-    }
+vulkano::impl_vertex!(Vertex, position, color);
+
+#[derive(Default, Copy, Clone)]
+struct InstanceData {
+    position_offset: [f32; 2],
+    scale: f32
 }
+
+vulkano::impl_vertex!(InstanceData, position_offset, scale);
 
 fn device_rank(physical: &PhysicalDevice) -> u64 {
     // Device type ranks highest
@@ -56,6 +127,8 @@ fn device_rank(physical: &PhysicalDevice) -> u64 {
 }
 
 fn main() {
+    test_render_config::build().unwrap();
+
     // Create a vulkan instance
     let instance = Instance::new(None, &InstanceExtensions::none(), None).expect("Failed to create vulkan instance");
 
@@ -91,56 +164,65 @@ fn main() {
 
     let queue = queues.next().unwrap();
 
-    // Create a buffer to be used by compute shader
-    let iter = (0 .. 65536).map(|x| cs::ty::SomeStruct {a: x as f32, b: x as f32});
-    let buffer = CpuAccessibleBuffer::from_iter(
-        device.clone(), 
-        BufferUsage::all(), 
-        false, 
-        iter
-    ).expect("Failed to create buffer");
-
-    // Create a compute shader
-    let shader = cs::Shader::load(device.clone()).expect("Failed to create shader module");
-
-    // Create a compute pipeline
-    let compute_pipeline = Arc::new(
-            ComputePipeline::new(
-                device.clone(), 
-                &shader.main_entry_point(), 
-                &()
-            )
-        .expect("Failed to create compute pipeline")
-    );
-
-    // Create the descriptor sets from layouts in the shader
-    let layout = compute_pipeline.layout().descriptor_set_layout(0).unwrap();
-    let set = Arc::new(
-        PersistentDescriptorSet::start(layout.clone())
-            .add_buffer(buffer.clone()).unwrap()
-            .build().unwrap()
-    );
-
-    // Build compute command buffer
-    let mut cmd_buffer_builder = AutoCommandBufferBuilder::new(
+    let vertex_buffer = CpuAccessibleBuffer::from_iter(
         device.clone(),
-        queue.family()
+        BufferUsage::all(),
+        false,
+        vec![
+            Vertex {
+                position: [-0.5, -0.5],
+                color: [1.0, 1.0, 0.0]
+            },
+            Vertex {
+                position: [0.0, 0.5],
+                color: [1.0, 0.0, 1.0]
+            },
+            Vertex {
+                position: [0.5, -0.25],
+                color: [0.0, 1.0, 1.0]
+            }
+        ].into_iter()
     ).unwrap();
 
-    // Record a dispatch command with 1024 compute work groups along one dimension
-
-    // Descriptor set is bound here. You can make reads/writes to the underlying
-    // buffer before and after dispatch.
-    cmd_buffer_builder.dispatch(
-        [1024, 1, 1],
-        compute_pipeline.clone(),
-        set.clone(),
-        ()
+    let instance_buffer= CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        false,
+        vec![
+            InstanceData {
+                position_offset: [-0.5, -0.5],
+                scale: 1.0 
+            },
+            InstanceData {
+                position_offset: [0.0, 0.5],
+                scale: 0.5
+            },
+            InstanceData {
+                position_offset: [0.5, -0.25],
+                scale: 0.75
+            }
+        ].into_iter()
     ).unwrap();
 
-    let cmd_buffer = cmd_buffer_builder.build().unwrap();
+    // Render pass and framebuffers
 
-    // Begin image portion
+    let render_pass = Arc::new(
+        vulkano::single_pass_renderpass!(
+            device.clone(),
+            attachments: {
+                color: {
+                    load: Clear,
+                    store: Store,
+                    format: Format::R8G8B8A8Unorm,
+                    samples: 1,
+                }
+            },
+            pass: {
+                color: [color],
+                depth_stencil: {}
+            }
+        ).unwrap()
+    );
 
     let image = StorageImage::new(
         device.clone(),
@@ -152,64 +234,114 @@ fn main() {
         Some(queue.family())
     ).unwrap();
 
-    let image_buffer= CpuAccessibleBuffer::from_iter(
+    let image_buf = CpuAccessibleBuffer::from_iter(
         device.clone(),
         BufferUsage::all(),
         false,
         (0 .. 1024 * 1024 * 4).map(|_| 0u8)
-    ).expect("Failed to create image buffer");
+    ).expect("Failed to create image buf");
 
-    let mandelbrot_shader = mandelbrot::Shader::load(device.clone()).expect("Failed to load mandelbrot shader");
-    let image_compute_pipeline = Arc::new(
-        ComputePipeline::new(
-            device.clone(),
-            &mandelbrot_shader.main_entry_point(),
-            &()
-        ).expect("Failed to create image compute pipeline")
+    let framebuffer = Arc::new(
+        Framebuffer::start(
+            render_pass.clone()
+        )
+        .add(image.clone()).unwrap()
+        .build().unwrap()
     );
 
-    let image_layout = image_compute_pipeline.layout().descriptor_set_layout(0).unwrap();
-    let image_set = Arc::new(
-        PersistentDescriptorSet::start(image_layout.clone())
-            .add_image(image.clone()).unwrap()
-            .build().unwrap()
+    // Pipeline
+    mod vs {
+        vulkano_shaders::shader!{
+            ty: "vertex",
+            path: "src/shaders/passthrough_2d.vert"
+        }
+    }
+
+    mod fs {
+        vulkano_shaders::shader!{
+            ty: "fragment",
+            path: "src/shaders/passthrough.frag"
+        }
+    }
+
+    let vs = vs::Shader::load(device.clone()).expect("Failed to create VS");
+    let fs = fs::Shader::load(device.clone()).expect("Failed to create FS");
+
+    let pipeline = Arc::new(
+        GraphicsPipeline::start()
+            .vertex_input(
+                OneVertexOneInstanceDefinition::<Vertex, InstanceData>::new()
+            )//.vertex_input_single_buffer::<Vertex>()
+            .vertex_shader(
+                vs.main_entry_point(), 
+                ()
+            )
+            .viewports_dynamic_scissors_irrelevant(1)
+            .fragment_shader(
+                fs.main_entry_point(), 
+                ()
+            )
+            .render_pass(
+                Subpass::from(
+                    render_pass.clone(), 
+                    0
+                ).unwrap()
+            )
+            .build(device.clone())
+            .unwrap()
     );
 
-    let mut image_cmd_buf_builder = AutoCommandBufferBuilder::new(
-        device.clone(),
-        queue.family()
+    // Draw commands
+
+    let dynamic_state = DynamicState {
+        viewports: Some(
+            vec![
+                Viewport {
+                    origin: [0.0, 0.0],
+                    dimensions: [1024.0, 1024.0],
+                    depth_range: 0.0 .. 1.0,
+                }
+            ]
+        ),
+        .. DynamicState::none()
+    };
+
+    let mut cmd_buf_builder = AutoCommandBufferBuilder::primary_one_time_submit(
+        device.clone(), 
+        queue_family
     ).unwrap();
 
-    image_cmd_buf_builder
-        .clear_color_image(
-            image.clone(), 
-            ClearValue::Float(
-                [0.0, 0.0, 1.0, 1.0]
-            )
+    cmd_buf_builder
+        .begin_render_pass(
+            framebuffer.clone(), 
+            false, 
+            vec![[0.0, 0.0, 1.0, 1.0].into()]
         ).unwrap()
-        .dispatch(
-            [1024 / 8, 1024 / 8, 1],
-            image_compute_pipeline.clone(),
-            image_set.clone(),
+
+        .draw(
+            pipeline.clone(),
+            &dynamic_state,
+            (vertex_buffer.clone(), instance_buffer.clone()),
+            (),
             ()
         ).unwrap()
-        .copy_image_to_buffer(
-            image.clone(),
-            image_buffer.clone()
-        ).unwrap();
 
-    let image_command_buffer = image_cmd_buf_builder.build().unwrap();
+        .end_render_pass()
+        .unwrap()
+        
+        .copy_image_to_buffer(
+            image.clone(), 
+            image_buf.clone()
+        )
+        .unwrap();
+    
+    let cmd_buf = cmd_buf_builder.build().unwrap();
 
     // Execute
     let future = sync::now(device.clone())
         .then_execute(
             queue.clone(), 
-            cmd_buffer
-        )
-        .unwrap()
-        .then_execute(
-            queue.clone(),
-            image_command_buffer,
+            cmd_buf
         )
         .unwrap()
         .then_signal_fence_and_flush()
@@ -217,22 +349,14 @@ fn main() {
 
     future.wait(None).unwrap();
 
-    println!("Compute dispatch done");
+    println!("Draw done");
 
-    // Assert test shader output is correct
-    let data_buffer_content = buffer.read().unwrap();
-    for n in 0..65536 {
-        let test_struct = data_buffer_content[n as usize];
-        assert_eq!(test_struct.a, n as f32 * 12f32);
-        assert_eq!(test_struct.b, n as f32 * 21f32);
-    }
-
-    let image_buffer_content = image_buffer.read().unwrap();
+    let image_buf_content = image_buf.read().unwrap();
     let image = ImageBuffer::<Rgba<u8>, _>::from_raw(
-        1024, 
         1024,
-        &image_buffer_content[..]
+        1024,
+        &image_buf_content[..]
     ).unwrap();
 
-    image.save("image.png").unwrap();
+    image.save("triangle.png").unwrap();
 }
