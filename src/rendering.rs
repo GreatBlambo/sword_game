@@ -26,21 +26,25 @@ pub struct PassDesc<'rb> {
 }
 
 impl<'rb> PassDesc<'rb> {
+    #[inline]
     pub fn add_color_output(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.color_outputs.borrow_mut().push(attachment);
         attachment.writers.borrow_mut().push(self);
     }
 
+    #[inline]
     pub fn set_depth_output(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.depth_output.borrow_mut().replace(attachment);
         attachment.writers.borrow_mut().push(self);
     }
 
+    #[inline]
     pub fn add_color_input(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.color_inputs.borrow_mut().push(attachment);
         attachment.readers.borrow_mut().push(self);
     }
 
+    #[inline]
     pub fn set_depth_input(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.depth_input.borrow_mut().replace(attachment);
         attachment.readers.borrow_mut().push(self);
@@ -201,8 +205,18 @@ pub struct Renderer {
 
 }
 
-
 #[macro_export]
+macro_rules! backbuffer {
+    (backbuffer, $gfx_pass_name:ident, $builder:ident) => (
+        let backbuffer = $builder.get_backbuffer_attachment();
+        $gfx_pass_name.add_color_output(backbuffer);
+    );
+    ($color_output_atch:ident, $gfx_pass_name:ident, $builder:ident) => (
+        $gfx_pass_name.add_color_output($color_output_atch);
+    );
+}
+
+#[macro_export(local_inner_macros)]
 macro_rules! render_config {
     {
         name: $render_config_name:ident,
@@ -251,31 +265,31 @@ macro_rules! render_config {
             use vulkano::format::Format;
             pub fn build() -> Result<crate::rendering::Renderer, &'static str> {
                 let builder = crate::rendering::RendererBuilder::new();
-
-                let backbuffer = builder.get_backbuffer_attachment();
                 $(
                     let $atch_name = builder.add_attachment(std::stringify!($atch_name), $format, $samples);
                 )*
 
                 $(
-                    // Create pass
-                    let $gfx_pass_name = builder.add_pass(std::stringify!($gfx_pass_name));
+                    {
+                        // Create pass
+                        let $gfx_pass_name = builder.add_pass(std::stringify!($gfx_pass_name));
 
-                    // Add outputs
-                    $(
-                        $gfx_pass_name.add_color_output($color_output_atch);
-                    )*
-                    $(
-                        $gfx_pass_name.set_depth_output($depth_output_atch);
-                    )?
+                        // Add outputs
+                        $(
+                            backbuffer!($color_output_atch, $gfx_pass_name, builder);
+                        )*
+                        $(
+                            $gfx_pass_name.set_depth_output($depth_output_atch);
+                        )?
 
-                    // Add inputs
-                    $(
-                        $gfx_pass_name.add_color_input($color_input_atch);
-                    )*
-                    $(
-                        $gfx_pass_name.set_depth_input($depth_input_atch);
-                    )?
+                        // Add inputs
+                        $(
+                            $gfx_pass_name.add_color_input($color_input_atch);
+                        )*
+                        $(
+                            $gfx_pass_name.set_depth_input($depth_input_atch);
+                        )?
+                    }
                 )*
 
                 return builder.build();

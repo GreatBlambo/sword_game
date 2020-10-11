@@ -50,18 +50,22 @@ mod rendering {
         depth_output: RefCell<Option<&'rb AttachmentDesc<'rb>>>,
     }
     impl<'rb> PassDesc<'rb> {
+        #[inline]
         pub fn add_color_output(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
             self.color_outputs.borrow_mut().push(attachment);
             attachment.writers.borrow_mut().push(self);
         }
+        #[inline]
         pub fn set_depth_output(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
             self.depth_output.borrow_mut().replace(attachment);
             attachment.writers.borrow_mut().push(self);
         }
+        #[inline]
         pub fn add_color_input(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
             self.color_inputs.borrow_mut().push(attachment);
             attachment.readers.borrow_mut().push(self);
         }
+        #[inline]
         pub fn set_depth_input(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
             self.depth_input.borrow_mut().replace(attachment);
             attachment.readers.borrow_mut().push(self);
@@ -243,19 +247,35 @@ mod test_render_config {
     use vulkano::format::Format;
     pub fn build() -> Result<crate::rendering::Renderer, &'static str> {
         let builder = crate::rendering::RendererBuilder::new();
-        let backbuffer = builder.get_backbuffer_attachment();
         let depth = builder.add_attachment("depth", Format::D24Unorm_S8Uint, 1);
-        let color = builder.add_attachment("color", Format::R8G8B8A8Unorm, 1);
+        let albedo = builder.add_attachment("albedo", Format::R8G8B8A8Unorm, 1);
         let normal = builder.add_attachment("normal", Format::R8G8Unorm, 1);
-        let gbuffer = builder.add_pass("gbuffer");
-        gbuffer.add_color_output(color);
-        gbuffer.add_color_output(normal);
-        gbuffer.set_depth_output(depth);
-        let lighting = builder.add_pass("lighting");
-        lighting.add_color_output(backbuffer);
-        lighting.add_color_input(color);
-        lighting.add_color_input(normal);
-        lighting.set_depth_input(depth);
+        let color = builder.add_attachment("color", Format::R8G8B8A8Unorm, 1);
+        let blur = builder.add_attachment("blur", Format::R8G8B8A8Unorm, 1);
+        let blur2 = builder.add_attachment("blur2", Format::R8G8B8A8Unorm, 1);
+        {
+            let gbuffer = builder.add_pass("gbuffer");
+            gbuffer.add_color_output(albedo);
+            gbuffer.add_color_output(normal);
+            gbuffer.set_depth_output(depth);
+        }
+        {
+            let lighting = builder.add_pass("lighting");
+            lighting.add_color_output(color);
+            lighting.add_color_input(albedo);
+            lighting.add_color_input(normal);
+            lighting.set_depth_input(depth);
+        }
+        {
+            let blur_pass = builder.add_pass("blur_pass");
+            blur_pass.add_color_output(blur);
+            blur_pass.add_color_input(color);
+        }
+        {
+            let blur_pass2 = builder.add_pass("blur_pass2");
+            blur_pass2.add_color_output(blur2);
+            blur_pass2.add_color_input(color);
+        }
         return builder.build();
     }
 }

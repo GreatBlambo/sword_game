@@ -42,12 +42,24 @@ render_config!(
             format: Format::D24Unorm_S8Uint,
             samples: 1
         },
-        color: {
+        albedo: {
             format: Format::R8G8B8A8Unorm,
             samples: 1
         },
         normal: {
             format: Format::R8G8Unorm,
+            samples: 1
+        },
+        color: {
+            format: Format::R8G8B8A8Unorm,
+            samples: 1
+        },
+        blur: {
+            format: Format::R8G8B8A8Unorm,
+            samples: 1
+        },
+        blur2: {
+            format: Format::R8G8B8A8Unorm,
             samples: 1
         }
     },
@@ -71,7 +83,7 @@ render_config!(
     ],
     graphics_passes: {
         gbuffer: {
-            color_outputs: [color, normal],
+            color_outputs: [albedo, normal],
             depth_stencil_output: {depth},
             color_inputs: [],
             depth_stencil_input: {},
@@ -83,10 +95,46 @@ render_config!(
             }
         },
         lighting: {
+            color_outputs: [color],
+            depth_stencil_output: {},
+            color_inputs: [albedo, normal],
+            depth_stencil_input: {depth},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        },
+        blur_pass: {
+            color_outputs: [blur],
+            depth_stencil_output: {},
+            color_inputs: [color],
+            depth_stencil_input: {},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        },
+        blur_pass2: {
+            color_outputs: [blur2],
+            depth_stencil_output: {},
+            color_inputs: [color],
+            depth_stencil_input: {},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        },
+        composite_pass: {
             color_outputs: [backbuffer],
             depth_stencil_output: {},
-            color_inputs: [color, normal],
-            depth_stencil_input: {depth},
+            color_inputs: [color, blur, blur2],
+            depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
                     vertex: "src/shaders/passthrough_2d.vert",
