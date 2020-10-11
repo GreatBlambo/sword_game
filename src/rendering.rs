@@ -206,7 +206,7 @@ pub struct Renderer {
 }
 
 #[macro_export]
-macro_rules! backbuffer {
+macro_rules! color_output {
     (backbuffer, $gfx_pass_name:ident, $builder:ident) => (
         let backbuffer = $builder.get_backbuffer_attachment();
         $gfx_pass_name.add_color_output(backbuffer);
@@ -286,7 +286,7 @@ macro_rules! render_config {
 
                         // Add outputs
                         $(
-                            backbuffer!($color_output_atch, $gfx_pass_name, builder);
+                            color_output!($color_output_atch, $gfx_pass_name, builder);
                         )*
                         $(
                             $gfx_pass_name.set_depth_output($depth_output_atch);

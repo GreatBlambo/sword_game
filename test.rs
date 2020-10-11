@@ -243,7 +243,7 @@ mod rendering {
     }
     pub struct Renderer {}
 }
-mod test_render_config {
+mod test_renderer {
     use vulkano::format::Format;
     pub fn build() -> Result<crate::rendering::Renderer, &'static str> {
         let builder = crate::rendering::RendererBuilder::new();
@@ -253,6 +253,7 @@ mod test_render_config {
         let color = builder.add_attachment("color", Format::R8G8B8A8Unorm, 1);
         let blur = builder.add_attachment("blur", Format::R8G8B8A8Unorm, 1);
         let blur2 = builder.add_attachment("blur2", Format::R8G8B8A8Unorm, 1);
+        let id = builder.add_attachment("id", Format::R32Uint, 1);
         {
             let gbuffer = builder.add_pass("gbuffer");
             gbuffer.add_color_output(albedo);
@@ -274,7 +275,19 @@ mod test_render_config {
         {
             let blur_pass2 = builder.add_pass("blur_pass2");
             blur_pass2.add_color_output(blur2);
-            blur_pass2.add_color_input(color);
+            blur_pass2.add_color_input(blur);
+        }
+        {
+            let composite_pass = builder.add_pass("composite_pass");
+            let backbuffer = builder.get_backbuffer_attachment();
+            composite_pass.add_color_output(backbuffer);
+            composite_pass.add_color_input(color);
+            composite_pass.add_color_input(blur);
+            composite_pass.add_color_input(blur2);
+        }
+        {
+            let id_pass = builder.add_pass("id_pass");
+            id_pass.add_color_output(id);
         }
         return builder.build();
     }
@@ -436,7 +449,7 @@ fn device_rank(physical: &PhysicalDevice) -> u64 {
     return device_type_rank;
 }
 fn main() {
-    test_render_config::build().unwrap();
+    test_renderer::build().unwrap();
     let instance = Instance::new(None, &InstanceExtensions::none(), None)
         .expect("Failed to create vulkan instance");
     let physical = PhysicalDevice::enumerate(&instance)

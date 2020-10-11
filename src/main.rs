@@ -36,7 +36,7 @@ use vulkano::pipeline::vertex::OneVertexOneInstanceDefinition;
 mod rendering;
 
 render_config!(
-    name: test_render_config,
+    name: test_renderer,
     attachments: {
         depth: {
             format: Format::D24Unorm_S8Uint
@@ -118,7 +118,7 @@ render_config!(
         blur_pass2: {
             color_outputs: [blur2],
             depth_stencil_output: {},
-            color_inputs: [color],
+            color_inputs: [blur],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -142,8 +142,8 @@ render_config!(
         id_pass: {
             color_outputs: [id],
             depth_stencil_output: {},
-            color_inputs: [color],
-            depth_stencil_input: {depth},
+            color_inputs: [],
+            depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
                     vertex: "src/shaders/passthrough_2d.vert",
@@ -184,7 +184,7 @@ fn device_rank(physical: &PhysicalDevice) -> u64 {
 }
 
 fn main() {
-    test_render_config::build().unwrap();
+    test_renderer::build().unwrap();
 
     // Create a vulkan instance
     let instance = Instance::new(None, &InstanceExtensions::none(), None).expect("Failed to create vulkan instance");
