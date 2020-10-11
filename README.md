@@ -15,6 +15,6 @@ Textures, storage buffers
 ## TODO
 1. Map logical image resources to physical ones
 2. Render pass phase 1
-3. Load assets, show them on screen
+3. Materials phase 1
+4. Load assets, show them on screen
     - Geo only, no textures
-4. Materials phase 1
