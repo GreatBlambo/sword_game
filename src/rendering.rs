@@ -6,6 +6,8 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::collections::HashSet;
 use std::collections::HashMap;
+use std::collections::BinaryHeap;
+use std::cmp::Ordering;
 
 use std::ptr::eq;
 
@@ -167,11 +169,45 @@ impl<'rb> RendererBuilder<'rb> {
             pub fn is_independent(&self) -> bool {
                 return self.dependencies.borrow().iter().all(|x| !x.is_edge.get());
             }
+
+            pub fn depends_on(&self, other: &'a PassNode<'a, 'rb>) -> bool {
+                if eq(self, other) {
+                    return true;
+                }
+                for dependency in self.dependencies.borrow().iter() {
+                    if dependency.pass_node.depends_on(other) {
+                        return true;
+                    }
+                }
+                return false;
+            }
         }
 
         let mut pass_nodes: HashMap<&str, PassNode<'_, 'rb>> = HashMap::new();
 
-        let mut root_nodes: VecDeque<(&PassNode<'_, 'rb>, usize)> = VecDeque::new();
+        struct RootNode<'a, 'rb> {
+            node: &'a PassNode<'a, 'rb>,
+            overlap_score: usize
+        }
+
+        impl<'a, 'rb> Ord for RootNode<'a, 'rb> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.overlap_score.cmp(&other.overlap_score)
+            }
+        }
+        impl<'a, 'rb> PartialOrd for RootNode<'a, 'rb>{
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl<'a, 'rb> Eq for RootNode<'a, 'rb> {}
+        impl<'a, 'rb> PartialEq for RootNode<'a, 'rb> {
+            fn eq(&self, other: &Self) -> bool {
+                self.overlap_score == other.overlap_score
+            }
+        }
+
+        let mut root_nodes: BinaryHeap<RootNode<'_, 'rb>> = BinaryHeap::new();
 
         // Create new node objects
         for pass in self.passes.borrow().iter() {
@@ -240,19 +276,23 @@ impl<'rb> RendererBuilder<'rb> {
             }
 
             if pass_node.is_independent() {
-                root_nodes.push_back((pass_node, 0));
+                root_nodes.push(RootNode {
+                    node: pass_node,
+                    overlap_score: usize::MAX
+                });
             }
         }
 
-        let mut sorted_passes: Vec<(&PassNode<'_, 'rb>, usize)> = Vec::new();
+        let mut sorted_passes: Vec<&PassNode<'_, 'rb>> = Vec::new();
 
         let mut visited: HashSet<&str> = HashSet::new();
         while !root_nodes.is_empty() {
-            let current_pass = root_nodes.pop_front().unwrap();
+            // Schedule
+            let current_pass = root_nodes.pop().unwrap().node;
             sorted_passes.push(current_pass);
 
             // Remove edge for color attachments if it exists
-            for dependent in current_pass.0.dependents.borrow().iter() {
+            for dependent in current_pass.dependents.borrow().iter() {
                 if !dependent.is_edge.get() {
                     continue;
                 }
@@ -261,14 +301,28 @@ impl<'rb> RendererBuilder<'rb> {
 
                 // Remove current pass from dependent's dependencies
                 for dependency in dependent.pass_node.dependencies.borrow().iter() {
-                    if eq(dependency.pass_node, current_pass.0) {
+                    if eq(dependency.pass_node, current_pass) {
                         dependency.is_edge.replace(false);
                     }
                 }
 
                 // If dependent no longer has dependencies, add to root nodes queue
                 if dependent.pass_node.is_independent() && !visited.contains(dependent.pass_node.pass.name) {
-                    root_nodes.push_back((dependent.pass_node, current_pass.1 + 1));
+                    // Calculate overlap score
+                    let overlap_score: usize = sorted_passes.iter().fold(0,
+                        |s, sorted| {
+                            if dependent.pass_node.depends_on(sorted) {
+                                return s + 1;
+                            }
+                            return s;
+                        }
+                    );
+                    // Insert into queue
+                    root_nodes.push(RootNode {
+                            node: dependent.pass_node,
+                            overlap_score
+                        }
+                    );
                     visited.insert(dependent.pass_node.pass.name);
                 }
             }
@@ -281,10 +335,11 @@ impl<'rb> RendererBuilder<'rb> {
             }
         }
 
+        // Reorder for optimal pipelining
+
         println!("\nPass sorting complete. Result:\n");
         for pass_node in sorted_passes.iter() {
-            print!("Sort order: {} = ", pass_node.1);
-            pass_node.0.pass.display();
+            pass_node.pass.display();
         }
 
         // Create vulkan resources
@@ -292,6 +347,12 @@ impl<'rb> RendererBuilder<'rb> {
         println!("\nCreating vulkan resources\n");
 
         // Map logical attachments to physical attachments
+
+        // Two logical attachments (A, B) can be merged into one physical attachment if:
+        // 1. The last write of A completes before the first write of B
+        // 2. The last read of A completes before the first write of B
+
+
 
         return Ok(
             Renderer {

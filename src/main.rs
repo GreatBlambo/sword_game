@@ -58,6 +58,9 @@ render_config!(
         },
         id: {
             format: Format::R32Uint
+        },
+        velocity: {
+            format: Format::R8G8B8A8Unorm
         }
     },
     default_vertex_bindings: [
@@ -118,7 +121,7 @@ render_config!(
         blur_pass2: {
             color_outputs: [blur2],
             depth_stencil_output: {},
-            color_inputs: [blur],
+            color_inputs: [blur, velocity],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -143,6 +146,18 @@ render_config!(
             color_outputs: [id],
             depth_stencil_output: {},
             color_inputs: [],
+            depth_stencil_input: {},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        },
+        velocity_pass: {
+            color_outputs: [velocity],
+            depth_stencil_output: {},
+            color_inputs:[id],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
