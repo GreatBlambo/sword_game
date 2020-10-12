@@ -311,7 +311,7 @@ impl<'rb> RendererBuilder<'rb> {
                     // Calculate overlap score
                     let overlap_score: usize = sorted_passes.iter().fold(0,
                         |s, sorted| {
-                            if dependent.pass_node.depends_on(sorted) {
+                            if !dependent.pass_node.depends_on(sorted) {
                                 return s + 1;
                             }
                             return s;

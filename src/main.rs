@@ -56,10 +56,10 @@ render_config!(
         blur2: {
             format: Format::R8G8B8A8Unorm
         },
-        id: {
-            format: Format::R32Uint
-        },
         velocity: {
+            format: Format::R8G8B8A8Unorm
+        },
+        motion_blur: {
             format: Format::R8G8B8A8Unorm
         }
     },
@@ -121,7 +121,7 @@ render_config!(
         blur_pass2: {
             color_outputs: [blur2],
             depth_stencil_output: {},
-            color_inputs: [blur, velocity],
+            color_inputs: [blur],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -133,19 +133,7 @@ render_config!(
         composite_pass: {
             color_outputs: [backbuffer],
             depth_stencil_output: {},
-            color_inputs: [color, blur, blur2],
-            depth_stencil_input: {},
-            pipeline: {
-                shader_paths: {
-                    vertex: "src/shaders/passthrough_2d.vert",
-                    fragment: "src/shaders/passthrough.frag"
-                }
-            }
-        },
-        id_pass: {
-            color_outputs: [id],
-            depth_stencil_output: {},
-            color_inputs: [],
+            color_inputs: [color, blur, blur2, motion_blur],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -157,7 +145,19 @@ render_config!(
         velocity_pass: {
             color_outputs: [velocity],
             depth_stencil_output: {},
-            color_inputs:[id],
+            color_inputs: [],
+            depth_stencil_input: {},
+            pipeline: {
+                shader_paths: {
+                    vertex: "src/shaders/passthrough_2d.vert",
+                    fragment: "src/shaders/passthrough.frag"
+                }
+            }
+        },
+        motion_blur_pass: {
+            color_outputs: [motion_blur],
+            depth_stencil_output: {},
+            color_inputs: [velocity, color],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
