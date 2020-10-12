@@ -1,16 +1,19 @@
 use typed_arena::Arena;
 use vulkano::format::Format;
 use std::cell::RefCell;
+use std::cell::Cell;
 
 use std::collections::VecDeque;
-use std::iter::FromIterator;
+use std::collections::HashSet;
+use std::collections::HashMap;
 
 use std::ptr::eq;
+
 
 pub const BACKBUFFER_NAME: &str = "BACKBUFFER";
 
 pub struct AttachmentDesc<'rb> {
-    name: &'static str,
+    name: &'rb str,
     format: Format,
     samples: usize,
     readers: RefCell<Vec<&'rb PassDesc<'rb>>>,
@@ -18,7 +21,7 @@ pub struct AttachmentDesc<'rb> {
 }
 
 pub struct PassDesc<'rb> {
-    name: &'static str,
+    name: &'rb str,
     color_inputs: RefCell<Vec<&'rb AttachmentDesc<'rb>>>,
     color_outputs: RefCell<Vec<&'rb AttachmentDesc<'rb>>>,
     depth_input: RefCell<Option<&'rb AttachmentDesc<'rb>>>,
@@ -27,27 +30,42 @@ pub struct PassDesc<'rb> {
 
 impl<'rb> PassDesc<'rb> {
     #[inline]
+    pub fn display(&'rb self) {
+        println!("Pass name: {}", self.name);
+    }
+
+    #[inline]
+    fn add_writer(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
+        attachment.writers.borrow_mut().push(self);
+    }
+
+    #[inline]
+    fn add_reader(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
+        attachment.readers.borrow_mut().push(self);
+    }
+
+    #[inline]
     pub fn add_color_output(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.color_outputs.borrow_mut().push(attachment);
-        attachment.writers.borrow_mut().push(self);
+        self.add_writer(attachment);
     }
 
     #[inline]
     pub fn set_depth_output(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.depth_output.borrow_mut().replace(attachment);
-        attachment.writers.borrow_mut().push(self);
+        self.add_writer(attachment);
     }
 
     #[inline]
     pub fn add_color_input(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.color_inputs.borrow_mut().push(attachment);
-        attachment.readers.borrow_mut().push(self);
+        self.add_reader(attachment);
     }
 
     #[inline]
     pub fn set_depth_input(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
         self.depth_input.borrow_mut().replace(attachment);
-        attachment.readers.borrow_mut().push(self);
+        self.add_reader(attachment);
     }
 }
 
@@ -94,7 +112,7 @@ impl<'rb> RendererBuilder<'rb> {
             color_inputs: RefCell::new(Vec::new()),
             color_outputs: RefCell::new(Vec::new()),
             depth_input: RefCell::new(None),
-            depth_output: RefCell::new(None),
+            depth_output: RefCell::new(None)
         });
 
         self.passes.borrow_mut().push(pass);
@@ -133,65 +151,147 @@ impl<'rb> RendererBuilder<'rb> {
             }
         }
 
-        // Toposort passes
-        let mut sorted_passes: Vec<(&'rb PassDesc<'rb>, usize)> = Vec::new();
-        let mut no_incoming: VecDeque<(&'rb PassDesc<'rb>, usize)> = VecDeque::new();
+        struct PassNodeDependency<'a, 'rb> {
+            pass_node: &'a PassNode<'a, 'rb>,
+            attachment: &'rb AttachmentDesc<'rb>,
+            is_edge: Cell<bool> // JUST used for toposort
+        }
 
-        for pass in self.passes.borrow().iter() {
-            if pass.color_inputs.borrow().is_empty() && pass.depth_input.borrow().is_none() {
-                no_incoming.push_back((pass, 0));
+        struct PassNode<'a, 'rb> {
+            pass: &'rb PassDesc<'rb>,
+            dependents: RefCell<Vec<PassNodeDependency<'a, 'rb>>>,
+            dependencies: RefCell<Vec<PassNodeDependency<'a, 'rb>>>
+        }
+
+        impl<'a, 'rb> PassNode<'a, 'rb> {
+            pub fn is_independent(&self) -> bool {
+                return self.dependencies.borrow().iter().all(|x| !x.is_edge.get());
             }
         }
 
-        let remove_edge = |attachment: &'rb AttachmentDesc<'rb>, current_pass: &'rb PassDesc<'rb>, current_depth: usize| {
-            let mut new_no_incoming: Vec<(&'rb PassDesc<'rb>, usize)> = Vec::new();
-            // For each output attachment, remove pass from writers of attachments
-            attachment.writers.borrow_mut().retain(|x| !eq(*x, current_pass));
-            // If the pass was the last writer to this attachment, remove the attachment from inputs of all of its readers
-            if attachment.writers.borrow().is_empty() {
-                for reading_pass in attachment.readers.borrow().iter() {
-                    // Remove attachment from color inputs
-                    reading_pass.color_inputs.borrow_mut().retain(|x| !eq(*x,attachment));
-                    // Remove attachment from depth inputs
-                    if reading_pass.depth_input.borrow().is_some() && eq(reading_pass.depth_input.borrow().unwrap(), attachment) {
-                        reading_pass.depth_input.replace(None);
-                    }
-                    // If the reading pass has no more inputs, then add to no_incoming queue at new depth
-                    if reading_pass.color_inputs.borrow().is_empty() && reading_pass.depth_input.borrow().is_none() {
-                        new_no_incoming.push((reading_pass, current_depth + 1));
-                    }
+        let mut pass_nodes: HashMap<&str, PassNode<'_, 'rb>> = HashMap::new();
+
+        let mut root_nodes: VecDeque<(&PassNode<'_, 'rb>, usize)> = VecDeque::new();
+
+        // Create new node objects
+        for pass in self.passes.borrow().iter() {
+            if pass_nodes.contains_key(pass.name) {
+                return Err("Pass name collision");
+            }
+            pass_nodes.insert(pass.name, PassNode {
+                pass,
+                dependents: RefCell::new(Vec::new()),
+                dependencies: RefCell::new(Vec::new()),
+            });
+        }
+
+        // Fill in inter-node dependencies
+        for pass in self.passes.borrow().iter() {
+            let pass_node: &PassNode<'_, 'rb> = pass_nodes.get(pass.name).unwrap();
+
+            for color_input in pass.color_inputs.borrow().iter() {
+                for writer in color_input.writers.borrow().iter() {
+                    pass_node.dependencies.borrow_mut().push(
+                        PassNodeDependency {
+                            pass_node: pass_nodes.get(writer.name).unwrap(),
+                            attachment: color_input,
+                            is_edge: Cell::new(true)
+                        }
+                    );
                 }
             }
-            return new_no_incoming;
-        };
 
-        while !no_incoming.is_empty() {
-            let current_pass = no_incoming.pop_front().unwrap();
+            if pass.depth_input.borrow().is_some() {
+                let depth_input = pass.depth_input.borrow().unwrap();
+                for writer in depth_input.writers.borrow().iter() {
+                    pass_node.dependencies.borrow_mut().push(
+                        PassNodeDependency {
+                            pass_node: pass_nodes.get(writer.name).unwrap(),
+                            attachment: depth_input,
+                            is_edge: Cell::new(true)
+                        }
+                    )
+                }
+            }
+
+            for color_output in pass.color_outputs.borrow().iter() {
+                for reader in color_output.readers.borrow().iter() {
+                    pass_node.dependents.borrow_mut().push(
+                        PassNodeDependency {
+                            pass_node: pass_nodes.get(reader.name).unwrap(),
+                            attachment: color_output,
+                            is_edge: Cell::new(true)
+                        }
+                    );
+                }
+            }
+
+            if pass.depth_output.borrow().is_some() {
+                let depth_output = pass.depth_output.borrow().unwrap();
+                for reader in depth_output.readers.borrow().iter() {
+                    pass_node.dependents.borrow_mut().push(
+                        PassNodeDependency {
+                            pass_node: pass_nodes.get(reader.name).unwrap(),
+                            attachment: depth_output,
+                            is_edge: Cell::new(true)
+                        }
+                    )
+                }
+            }
+
+            if pass_node.is_independent() {
+                root_nodes.push_back((pass_node, 0));
+            }
+        }
+
+        let mut sorted_passes: Vec<(&PassNode<'_, 'rb>, usize)> = Vec::new();
+
+        let mut visited: HashSet<&str> = HashSet::new();
+        while !root_nodes.is_empty() {
+            let current_pass = root_nodes.pop_front().unwrap();
             sorted_passes.push(current_pass);
 
             // Remove edge for color attachments if it exists
-            for color_output in current_pass.0.color_outputs.borrow().iter() {
-                no_incoming.append(&mut VecDeque::from_iter(remove_edge(color_output, current_pass.0, current_pass.1)));
-            }
+            for dependent in current_pass.0.dependents.borrow().iter() {
+                if !dependent.is_edge.get() {
+                    continue;
+                }
 
-            // Remove edge for depth attachments if it exists
-            match *current_pass.0.depth_output.borrow() {
-                Some(x) => {
-                    no_incoming.append(&mut VecDeque::from_iter(remove_edge(x, current_pass.0, current_pass.1)));
-                },
-                None => ()
+                dependent.is_edge.replace(false);
+
+                // Remove current pass from dependent's dependencies
+                for dependency in dependent.pass_node.dependencies.borrow().iter() {
+                    if eq(dependency.pass_node, current_pass.0) {
+                        dependency.is_edge.replace(false);
+                    }
+                }
+
+                // If dependent no longer has dependencies, add to root nodes queue
+                if dependent.pass_node.is_independent() && !visited.contains(dependent.pass_node.pass.name) {
+                    root_nodes.push_back((dependent.pass_node, current_pass.1 + 1));
+                    visited.insert(dependent.pass_node.pass.name);
+                }
             }
         }
 
-        for pass in self.passes.borrow().iter() {
-            if !pass.color_inputs.borrow().is_empty() || pass.depth_input.borrow().is_some() {
+        // Check for cycles
+        for pass_node in pass_nodes.values() {
+            if !pass_node.is_independent() {
                 return Err("Cyclical render graph provided");
             }
         }
 
-        for pass in sorted_passes.iter() {
-            println!("Pass name: {}, sort order: {}", pass.0.name, pass.1);
+        println!("\nPass sorting complete. Result:\n");
+        for pass_node in sorted_passes.iter() {
+            print!("Sort order: {} = ", pass_node.1);
+            pass_node.0.pass.display();
         }
+
+        // Create vulkan resources
+
+        println!("\nCreating vulkan resources\n");
+
+        // Map logical attachments to physical attachments
 
         return Ok(
             Renderer {
