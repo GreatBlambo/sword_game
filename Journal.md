@@ -87,6 +87,6 @@ Pass name: blur_pass2
 Pass name: motion_blur_pass <<<<<<
 Pass name: composite_pass
 ```
-This is done by replacing the queue in the toposort with a priority queue. The score associated with each pass is the number of already scheduled passes which it has a dependency on. So, because motion_blur_pass has more dependencies, it will be scheduled later than those with less to avoid the latter from waiting on passes they have nothing to do with.
+This is done by replacing the queue in the toposort with a priority queue. The score associated with each pass is the number of already scheduled passes that it _DOESN'T_ have a dependency on. So, because motion_blur_pass has more dependencies, it will be scheduled later than those with less to avoid the latter from waiting on passes they have nothing to do with.
 
 From here, need to work on mapping to physical attachments...I went down the pass dependency rabbit hole today because I needed a structure which will give explicit dependencies between passes, rather than a sort order.
