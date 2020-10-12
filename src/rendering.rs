@@ -317,6 +317,8 @@ impl<'rb> RendererBuilder<'rb> {
                             return s;
                         }
                     );
+                    // NOTE: We DON'T have to include the items already in the priority queue, because it's
+                    // guaranteed that all items in this queue are independent.
                     // Insert into queue
                     root_nodes.push(RootNode {
                             node: dependent.pass_node,
