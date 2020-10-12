@@ -1,5 +1,6 @@
 ## 10/12
 
+### Render Pass ordering detour
 Progress on render passes. Made the node dependencies explicit, removed the "sort order" concept and modified it to allow as much overlap between dependent passes as possible.
 
 i.e.:
