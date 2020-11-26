@@ -85,7 +85,7 @@ render_config!(
         gbuffer: {
             color_outputs: [albedo, normal],
             depth_stencil_output: {depth},
-            color_inputs: [],
+            input_attachments: [],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -97,7 +97,7 @@ render_config!(
         lighting: {
             color_outputs: [color],
             depth_stencil_output: {},
-            color_inputs: [albedo, normal],
+            input_attachments: [albedo, normal],
             depth_stencil_input: {depth},
             pipeline: {
                 shader_paths: {
@@ -109,7 +109,7 @@ render_config!(
         blur_pass: {
             color_outputs: [blur],
             depth_stencil_output: {},
-            color_inputs: [color],
+            input_attachments: [color],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -121,7 +121,7 @@ render_config!(
         blur_pass2: {
             color_outputs: [blur2],
             depth_stencil_output: {},
-            color_inputs: [blur],
+            input_attachments: [blur],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -133,7 +133,7 @@ render_config!(
         composite_pass: {
             color_outputs: [backbuffer],
             depth_stencil_output: {},
-            color_inputs: [color, blur, blur2, motion_blur],
+            input_attachments: [color, blur, blur2, motion_blur],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -145,7 +145,7 @@ render_config!(
         velocity_pass: {
             color_outputs: [velocity],
             depth_stencil_output: {},
-            color_inputs: [],
+            input_attachments: [],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -157,7 +157,7 @@ render_config!(
         motion_blur_pass: {
             color_outputs: [motion_blur],
             depth_stencil_output: {},
-            color_inputs: [velocity, color],
+            input_attachments: [velocity, color],
             depth_stencil_input: {},
             pipeline: {
                 shader_paths: {
@@ -205,7 +205,13 @@ fn main() {
     let instance = Instance::new(None, &InstanceExtensions::none(), None).expect("Failed to create vulkan instance");
 
     // Choose a physical device
-    let physical = PhysicalDevice::enumerate(&instance).max_by(|x, y| device_rank(&x).cmp(&device_rank(&y))).expect("No physical device available");
+    let physical = PhysicalDevice::enumerate(&instance)
+        .max_by(
+            |x, y| {
+                return device_rank(&x).cmp(&device_rank(&y))
+            }
+        )
+        .expect("No physical device available");
 
     println!("Physical device chosen: {}", physical.name());
 

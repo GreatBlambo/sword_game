@@ -15,6 +15,7 @@ Textures, storage buffers
 ## TODO
 1. Map logical image resources to physical ones
 2. Render pass phase 1
+    - Two pass topo sort: one to get topological sorting to merge pass nodes, second to rearrange merged passes which have new dependencies
 3. Materials phase 1
 4. Load assets, show them on screen
     - Geo only, no textures

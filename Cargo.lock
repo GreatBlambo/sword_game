@@ -926,6 +926,7 @@ dependencies = [
  "cargo-emit",
  "image",
  "typed-arena",
+ "vk-sys",
  "vulkano",
  "vulkano-shaders",
  "vulkano-win",

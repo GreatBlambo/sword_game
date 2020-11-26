@@ -32,9 +32,10 @@ mod rendering {
     use vulkano::format::Format;
     use std::cell::RefCell;
     use std::cell::Cell;
-    use std::collections::VecDeque;
     use std::collections::HashSet;
     use std::collections::HashMap;
+    use std::collections::BinaryHeap;
+    use std::cmp::Ordering;
     use std::ptr::eq;
     pub const BACKBUFFER_NAME: &str = "BACKBUFFER";
     pub struct AttachmentDesc<'rb> {
@@ -52,20 +53,6 @@ mod rendering {
         depth_output: RefCell<Option<&'rb AttachmentDesc<'rb>>>,
     }
     impl<'rb> PassDesc<'rb> {
-        #[inline]
-        pub fn display(&'rb self) {
-            {
-                ::std::io::_print(::core::fmt::Arguments::new_v1(
-                    &["Pass name: ", "\n"],
-                    &match (&self.name,) {
-                        (arg0,) => [::core::fmt::ArgumentV1::new(
-                            arg0,
-                            ::core::fmt::Display::fmt,
-                        )],
-                    },
-                ));
-            };
-        }
         #[inline]
         fn add_writer(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
             attachment.writers.borrow_mut().push(self);
@@ -93,6 +80,79 @@ mod rendering {
         pub fn set_depth_input(&'rb self, attachment: &'rb AttachmentDesc<'rb>) {
             self.depth_input.borrow_mut().replace(attachment);
             self.add_reader(attachment);
+        }
+    }
+    struct PassNodeDependency<'a, 'rb> {
+        pass_node: &'a PassNode<'a, 'rb>,
+        attachment: &'rb AttachmentDesc<'rb>,
+        is_edge: Cell<bool>,
+    }
+    struct PassNode<'a, 'rb> {
+        pass: &'rb PassDesc<'rb>,
+        dependents: RefCell<Vec<PassNodeDependency<'a, 'rb>>>,
+        dependencies: RefCell<Vec<PassNodeDependency<'a, 'rb>>>,
+    }
+    impl<'a, 'rb> PassNode<'a, 'rb> {
+        pub fn is_independent(&self) -> bool {
+            return self.dependencies.borrow().iter().all(|x| !x.is_edge.get());
+        }
+        pub fn depends_on(&self, other: &'a PassNode<'a, 'rb>) -> bool {
+            if eq(self, other) {
+                return true;
+            }
+            for dependency in self.dependencies.borrow().iter() {
+                if dependency.pass_node.depends_on(other) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        #[inline]
+        pub fn display(&'rb self) {
+            {
+                ::std::io::_print(::core::fmt::Arguments::new_v1(
+                    &["Pass: ", ". Dependent on: \n"],
+                    &match (&self.pass.name,) {
+                        (arg0,) => [::core::fmt::ArgumentV1::new(
+                            arg0,
+                            ::core::fmt::Display::fmt,
+                        )],
+                    },
+                ));
+            };
+            for dependency in self.dependencies.borrow().iter() {
+                {
+                    ::std::io::_print(::core::fmt::Arguments::new_v1(
+                        &["- Pass ", ", via attachment ", "\n"],
+                        &match (&dependency.pass_node.pass.name, &dependency.attachment.name) {
+                            (arg0, arg1) => [
+                                ::core::fmt::ArgumentV1::new(arg0, ::core::fmt::Display::fmt),
+                                ::core::fmt::ArgumentV1::new(arg1, ::core::fmt::Display::fmt),
+                            ],
+                        },
+                    ));
+                };
+            }
+        }
+    }
+    struct RootNode<'a, 'rb> {
+        node: &'a PassNode<'a, 'rb>,
+        overlap_score: usize,
+    }
+    impl<'a, 'rb> Ord for RootNode<'a, 'rb> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.overlap_score.cmp(&other.overlap_score)
+        }
+    }
+    impl<'a, 'rb> PartialOrd for RootNode<'a, 'rb> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl<'a, 'rb> Eq for RootNode<'a, 'rb> {}
+    impl<'a, 'rb> PartialEq for RootNode<'a, 'rb> {
+        fn eq(&self, other: &Self) -> bool {
+            self.overlap_score == other.overlap_score
         }
     }
     pub struct RendererBuilder<'rb> {
@@ -151,36 +211,40 @@ mod rendering {
         pub fn get_backbuffer_attachment(&'rb self) -> &'rb AttachmentDesc<'rb> {
             return &self.backbuffer_attachment;
         }
-        pub fn build(&'rb self) -> Result<Renderer, &'static str> {
-            for pass in self.passes.borrow().iter() {
-                fn is_valid_depth_attachment<'rb>(
-                    attachment: Option<&'rb AttachmentDesc<'rb>>,
-                ) -> bool {
-                    match attachment {
-                        Some(AttachmentDesc {
-                            format: Format::D16Unorm,
-                            ..
-                        })
-                        | Some(AttachmentDesc {
-                            format: Format::D16Unorm_S8Uint,
-                            ..
-                        })
-                        | Some(AttachmentDesc {
-                            format: Format::D24Unorm_S8Uint,
-                            ..
-                        })
-                        | Some(AttachmentDesc {
-                            format: Format::D32Sfloat,
-                            ..
-                        })
-                        | Some(AttachmentDesc {
-                            format: Format::D32Sfloat_S8Uint,
-                            ..
-                        })
-                        | None => return true,
-                        _ => return false,
-                    }
+        fn validate_passes<'a, I>(passes: I) -> Result<(), &'static str>
+        where
+            I: Iterator<Item = &'a &'rb PassDesc<'rb>>,
+            'rb: 'a,
+        {
+            fn is_valid_depth_attachment<'rb>(
+                attachment: Option<&'rb AttachmentDesc<'rb>>,
+            ) -> bool {
+                match attachment {
+                    Some(AttachmentDesc {
+                        format: Format::D16Unorm,
+                        ..
+                    })
+                    | Some(AttachmentDesc {
+                        format: Format::D16Unorm_S8Uint,
+                        ..
+                    })
+                    | Some(AttachmentDesc {
+                        format: Format::D24Unorm_S8Uint,
+                        ..
+                    })
+                    | Some(AttachmentDesc {
+                        format: Format::D32Sfloat,
+                        ..
+                    })
+                    | Some(AttachmentDesc {
+                        format: Format::D32Sfloat_S8Uint,
+                        ..
+                    })
+                    | None => true,
+                    _ => false,
                 }
+            }
+            for pass in passes {
                 if !is_valid_depth_attachment(*pass.depth_input.borrow()) {
                     return Err("Cannot set non-depth attachment to depth input.");
                 }
@@ -188,38 +252,33 @@ mod rendering {
                     return Err("Cannot set non-depth attachment to depth output.");
                 }
             }
-            struct PassNodeDependency<'a, 'rb> {
-                pass_node: &'a PassNode<'a, 'rb>,
-                attachment: &'rb AttachmentDesc<'rb>,
-                is_edge: Cell<bool>,
-            }
-            struct PassNode<'a, 'rb> {
-                pass: &'rb PassDesc<'rb>,
-                dependents: RefCell<Vec<PassNodeDependency<'a, 'rb>>>,
-                dependencies: RefCell<Vec<PassNodeDependency<'a, 'rb>>>,
-            }
-            impl<'a, 'rb> PassNode<'a, 'rb> {
-                pub fn is_independent(&self) -> bool {
-                    return self.dependencies.borrow().iter().all(|x| !x.is_edge.get());
-                }
-            }
-            let mut pass_nodes: HashMap<&str, PassNode<'_, 'rb>> = HashMap::new();
-            let mut root_nodes: VecDeque<(&PassNode<'_, 'rb>, usize)> = VecDeque::new();
-            for pass in self.passes.borrow().iter() {
+            Ok(())
+        }
+        fn schedule_passes<'a, I>(
+            passes: I,
+            arena: &'a Arena<PassNode<'a, 'rb>>,
+        ) -> Result<Vec<&'a PassNode<'a, 'rb>>, &'static str>
+        where
+            I: Iterator<Item = &'a &'rb PassDesc<'rb>>,
+            'rb: 'a,
+        {
+            let mut pass_nodes: HashMap<&str, &'a PassNode<'a, 'rb>> = HashMap::new();
+            let mut root_nodes: BinaryHeap<RootNode<'a, 'rb>> = BinaryHeap::new();
+            for pass in passes {
                 if pass_nodes.contains_key(pass.name) {
                     return Err("Pass name collision");
                 }
                 pass_nodes.insert(
                     pass.name,
-                    PassNode {
+                    arena.alloc(PassNode {
                         pass,
                         dependents: RefCell::new(Vec::new()),
                         dependencies: RefCell::new(Vec::new()),
-                    },
+                    }),
                 );
             }
-            for pass in self.passes.borrow().iter() {
-                let pass_node: &PassNode<'_, 'rb> = pass_nodes.get(pass.name).unwrap();
+            for pass_node in pass_nodes.values() {
+                let pass = pass_node.pass;
                 for color_input in pass.color_inputs.borrow().iter() {
                     for writer in color_input.writers.borrow().iter() {
                         pass_node
@@ -265,28 +324,40 @@ mod rendering {
                     }
                 }
                 if pass_node.is_independent() {
-                    root_nodes.push_back((pass_node, 0));
+                    root_nodes.push(RootNode {
+                        node: pass_node,
+                        overlap_score: usize::MAX,
+                    });
                 }
             }
-            let mut sorted_passes: Vec<(&PassNode<'_, 'rb>, usize)> = Vec::new();
+            let mut sorted_passes: Vec<&'a PassNode<'a, 'rb>> = Vec::new();
             let mut visited: HashSet<&str> = HashSet::new();
             while !root_nodes.is_empty() {
-                let current_pass = root_nodes.pop_front().unwrap();
+                let current_pass = root_nodes.pop().unwrap().node;
                 sorted_passes.push(current_pass);
-                for dependent in current_pass.0.dependents.borrow().iter() {
+                for dependent in current_pass.dependents.borrow().iter() {
                     if !dependent.is_edge.get() {
                         continue;
                     }
                     dependent.is_edge.replace(false);
                     for dependency in dependent.pass_node.dependencies.borrow().iter() {
-                        if eq(dependency.pass_node, current_pass.0) {
+                        if eq(dependency.pass_node, current_pass) {
                             dependency.is_edge.replace(false);
                         }
                     }
                     if dependent.pass_node.is_independent()
                         && !visited.contains(dependent.pass_node.pass.name)
                     {
-                        root_nodes.push_back((dependent.pass_node, current_pass.1 + 1));
+                        let overlap_score: usize = sorted_passes.iter().fold(0, |s, sorted| {
+                            if !dependent.pass_node.depends_on(sorted) {
+                                return s + 1;
+                            }
+                            return s;
+                        });
+                        root_nodes.push(RootNode {
+                            node: dependent.pass_node,
+                            overlap_score,
+                        });
                         visited.insert(dependent.pass_node.pass.name);
                     }
                 }
@@ -296,25 +367,49 @@ mod rendering {
                     return Err("Cyclical render graph provided");
                 }
             }
+            Ok(sorted_passes)
+        }
+        pub fn build(&'rb self) -> Result<Renderer, &'static str> {
+            let passes = self.passes.borrow();
             {
                 ::std::io::_print(::core::fmt::Arguments::new_v1(
-                    &["\nPass sorting complete. Result:\n\n"],
+                    &["Validating passes...\n"],
                     &match () {
                         () => [],
                     },
                 ));
             };
-            for pass_node in sorted_passes.iter() {
+            RendererBuilder::validate_passes(passes.iter())?;
+            {
                 ::std::io::_print(::core::fmt::Arguments::new_v1(
-                    &["Sort order: ", " = "],
-                    &match (&pass_node.1,) {
+                    &["Scheduling passes...\n"],
+                    &match () {
+                        () => [],
+                    },
+                ));
+            };
+            let pass_node_arena: Arena<PassNode<'_, 'rb>> = Arena::new();
+            let scheduled_passes =
+                RendererBuilder::schedule_passes(passes.iter(), &pass_node_arena)?;
+            {
+                ::std::io::_print(::core::fmt::Arguments::new_v1(
+                    &["Pass scheduling complete. Result:\n\n"],
+                    &match () {
+                        () => [],
+                    },
+                ));
+            };
+            for (i, pass_node) in scheduled_passes.iter().enumerate() {
+                ::std::io::_print(::core::fmt::Arguments::new_v1(
+                    &["index ", ": "],
+                    &match (&i,) {
                         (arg0,) => [::core::fmt::ArgumentV1::new(
                             arg0,
                             ::core::fmt::Display::fmt,
                         )],
                     },
                 ));
-                pass_node.0.pass.display();
+                pass_node.display();
             }
             {
                 ::std::io::_print(::core::fmt::Arguments::new_v1(
@@ -339,7 +434,8 @@ mod test_renderer {
         let color = builder.add_attachment("color", Format::R8G8B8A8Unorm, 1);
         let blur = builder.add_attachment("blur", Format::R8G8B8A8Unorm, 1);
         let blur2 = builder.add_attachment("blur2", Format::R8G8B8A8Unorm, 1);
-        let id = builder.add_attachment("id", Format::R32Uint, 1);
+        let velocity = builder.add_attachment("velocity", Format::R8G8B8A8Unorm, 1);
+        let motion_blur = builder.add_attachment("motion_blur", Format::R8G8B8A8Unorm, 1);
         {
             let gbuffer = builder.add_pass("gbuffer");
             gbuffer.add_color_output(albedo);
@@ -370,10 +466,17 @@ mod test_renderer {
             composite_pass.add_color_input(color);
             composite_pass.add_color_input(blur);
             composite_pass.add_color_input(blur2);
+            composite_pass.add_color_input(motion_blur);
         }
         {
-            let id_pass = builder.add_pass("id_pass");
-            id_pass.add_color_output(id);
+            let velocity_pass = builder.add_pass("velocity_pass");
+            velocity_pass.add_color_output(velocity);
+        }
+        {
+            let motion_blur_pass = builder.add_pass("motion_blur_pass");
+            motion_blur_pass.add_color_output(motion_blur);
+            motion_blur_pass.add_color_input(velocity);
+            motion_blur_pass.add_color_input(color);
         }
         return builder.build();
     }

@@ -12,6 +12,7 @@ cargo-emit = "0.1.1"
 [dependencies]
 vulkano = "0.19"
 vulkano-shaders = "0.18"
+vk-sys = "0.5.2"
 image = "0.23"
 vulkano-win = "0.19"
 winit = "0.22"
